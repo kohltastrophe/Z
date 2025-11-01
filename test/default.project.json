@@ -1,0 +1,12 @@
+{
+	"name": "Test Z",
+	"emitLegacyScripts": false,
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"Z": {
+				"$path": "../src"
+			}
+		}
+	}
+}
