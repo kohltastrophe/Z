@@ -437,7 +437,7 @@ if Axes then
 		read = function(b: buffer, offset: number): (Axes, number)
 			local x, y, z = readBool(b, offset)
 			local back, bottom, front, left, right, top = readBool(b, offset + 1)
-			return Axes.new(
+			return (Axes.new :: any)(
 				x and Enum.Axis.X :: any,
 				y and Enum.Axis.Y :: any,
 				z and Enum.Axis.Z :: any,
