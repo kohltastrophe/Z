@@ -630,7 +630,7 @@ if Enum then
 	}, {
 		__call = function(_, enum: Enum): ZType
 			if not enumCache[enum] then
-				local items = enum:GetEnumItems()
+				local items: { EnumItem } = enum:GetEnumItems()
 
 				table.sort(items, function(a: EnumItem, b: EnumItem)
 					return a.Value < b.Value
