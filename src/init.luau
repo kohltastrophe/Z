@@ -1124,7 +1124,9 @@ for k, v in next, Z do
 		if not (v :: any).name then
 			(v :: any).name = k
 		end
-		pcall(table.freeze, v :: any)
+		if not table.isfrozen(v :: any) then
+			table.freeze(v :: any)
+		end
 		if not table.find(idToZType, v :: ZType) then
 			table.insert(idToZType, v :: ZType)
 		end
