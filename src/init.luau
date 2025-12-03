@@ -1433,10 +1433,8 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 		end,
 		write = function(b: buffer, offset: number, value: any)
 			if type(value) == "buffer" then
-				local len = buffer.len(value)
-				buffer.copy(b, offset, value, 0, len)
-
-				return offset + len
+				buffer.copy(b, offset, value)
+				return offset + buffer.len(value)
 			end
 
 			return serialize(schema, value, b, offset)
