@@ -77,11 +77,6 @@ function Z.some(t: ZType): ZType
 	return result
 end
 
---stylua: ignore
-local function writeu8x4(b: buffer, offset: number, w: number, x: number?, y: number?, z: number?)
-	buffer.writeu32(b, offset, math.round(w) + math.round(x or 0) * 2 ^ 8 + math.round(y or 0) * 2 ^ 16 + math.round(z or 0) * 2 ^ 24)
-end
-
 type B = boolean
 
 local function readBool(b: buffer, offset: number): (B, B, B, B, B, B, B, B)
@@ -477,7 +472,7 @@ Z.buffer = Z.buffer32
 local range = math.rad(359)
 
 local function Angle8(angle: number): number
-	return math.round((angle % (2 * math.pi)) * 255 / range)
+	return math.floor((angle % (2 * math.pi)) * 255 / range + 0.5)
 end
 
 local Angle8Map: { number } = {}
@@ -615,7 +610,7 @@ if CFrame then
 			buffer.writef32(b, offset, value.X)
 			buffer.writef32(b, offset + 4, value.Y)
 			buffer.writef32(b, offset + 8, value.Z)
-			writeu8x4(b, offset + 12, Angle8(rx), Angle8(ry), Angle8(rz))
+			buffer.writeu32(b, offset + 12, Angle8(rx) + Angle8(ry) * 256 + Angle8(rz) * 65536)
 			return offset + 15
 		end,
 	}
@@ -628,7 +623,10 @@ if Color3 then
 				offset + 3
 		end,
 		write = function(b: buffer, offset: number, value: Color3): number
-			writeu8x4(b, offset, value.R * 255, value.G * 255, value.B * 255)
+			local R = math.floor(value.R * 255 + 0.5)
+			local G = math.floor(value.G * 255 + 0.5)
+			local B = math.floor(value.B * 255 + 0.5)
+			buffer.writeu32(b, offset, R + G * 256 + B * 65536)
 			return offset + 3
 		end,
 	}
@@ -644,7 +642,12 @@ if ColorSequenceKeypoint then
 				offset + 4
 		end,
 		write = function(b: buffer, offset: number, value: ColorSequenceKeypoint): number
-			writeu8x4(b, offset, value.Time * 255, value.Value.R * 255, value.Value.G * 255, value.Value.B * 255)
+			local color = value.Value
+			local T = math.floor(value.Time * 255 + 0.5)
+			local R = math.floor(color.R * 255 + 0.5)
+			local G = math.floor(color.G * 255 + 0.5)
+			local B = math.floor(color.B * 255 + 0.5)
+			buffer.writeu32(b, offset, T + R * 256 + G * 65536 + B * 16777216)
 			return offset + 4
 		end,
 	}
