@@ -18,7 +18,11 @@ export type SchemaDefinition = { [number | string | ZType]: ZType }
 
 export type Field = { key: number | string | ZType, read: Read, write: Write, type: string }
 export type Schema = {
+	count: number,
 	fields: { Field },
+	keys: { number | string | ZType },
+	reads: { Read },
+	writes: { Write },
 	isList: boolean,
 	isMap: boolean,
 	name: string,
@@ -82,7 +86,14 @@ type B = boolean
 
 local function readBool(b: buffer, offset: number): (B, B, B, B, B, B, B, B)
 	local x = buffer.readu8(b, offset)
-	return x % 2 == 1, x % 4 >= 2, x % 8 >= 4, x % 16 >= 8, x % 32 >= 16, x % 64 >= 32, x % 128 >= 64, x % 256 >= 128
+	return bit32.btest(x, 1),
+		bit32.btest(x, 2),
+		bit32.btest(x, 4),
+		bit32.btest(x, 8),
+		bit32.btest(x, 16),
+		bit32.btest(x, 32),
+		bit32.btest(x, 64),
+		bit32.btest(x, 128)
 end
 
 local function writeBool(buf: buffer, offset: number, a: B, b: B?, c: B?, d: B?, e: B?, f: B?, g: B?, h: B?)
@@ -132,7 +143,7 @@ Z.bools = {
 		return { readBool(b, offset) }, offset + 1
 	end,
 	write = function(b: buffer, offset: number, value: { boolean }): number
-		return writeBool(b, offset, unpack(value, 1, 8))
+		return writeBool(b, offset, value[1], value[2], value[3], value[4], value[5], value[6], value[7], value[8])
 	end,
 }
 
@@ -168,52 +179,113 @@ Z.u32 = {
 	end,
 }
 
+local function readVarIntFallback(b: buffer, offset: number, result: number): (number, number)
+	local current = buffer.readu8(b, offset + 5)
+	result += (current % 128) * 34359738368
+	if current < 128 then
+		return result, offset + 6
+	end
+
+	current = buffer.readu8(b, offset + 6)
+	result += (current % 128) * 4398046511104
+	if current < 128 then
+		return result, offset + 7
+	end
+
+	current = buffer.readu8(b, offset + 7)
+	result += (current % 128) * 562949953421312
+	if current < 128 then
+		return result, offset + 8
+	end
+
+	current = buffer.readu8(b, offset + 8)
+	result += current * 72057594037927936
+	return result, offset + 9
+end
+
+local function writeVarIntFallback(b: buffer, offset: number, value: number): number
+	local temp = value
+	while temp >= 128 do
+		buffer.writeu8(b, offset, (temp % 128) + 128)
+		offset += 1
+		temp = temp // 128
+	end
+	buffer.writeu8(b, offset, temp)
+	return offset + 1
+end
+
+local function writeVarIntUnsigned(b: buffer, offset: number, value: number): number
+	if value < 128 then
+		buffer.writeu8(b, offset, value)
+		return offset + 1
+	elseif value < 16384 then
+		buffer.writeu16(b, offset, (value % 128 + 128) + (value // 128) * 256)
+		return offset + 2
+	elseif value < 2097152 then
+		buffer.writeu16(b, offset, (value % 128 + 128) + ((value // 128) % 128 + 128) * 256)
+		buffer.writeu8(b, offset + 2, value // 16384)
+		return offset + 3
+	elseif value < 268435456 then
+		buffer.writeu32(
+			b,
+			offset,
+			(value % 128 + 128)
+				+ ((value // 128) % 128 + 128) * 256
+				+ ((value // 16384) % 128 + 128) * 65536
+				+ (value // 2097152) * 16777216
+		)
+		return offset + 4
+	elseif value < 34359738368 then
+		buffer.writeu32(
+			b,
+			offset,
+			(value % 128 + 128)
+				+ ((value // 128) % 128 + 128) * 256
+				+ ((value // 16384) % 128 + 128) * 65536
+				+ ((value // 2097152) % 128 + 128) * 16777216
+		)
+		buffer.writeu8(b, offset + 4, value // 268435456)
+		return offset + 5
+	else
+		return writeVarIntFallback(b, offset, value)
+	end
+end
+
 Z.uint = {
-	read = function(b: buffer, offset: number?): (number, number)
-		local buffLen = buffer.len(b)
-		local readOffset = offset or 0
-		local result, shift = 0, 0
-		while true do
-			if readOffset >= buffLen then
-				error("ULEB128Decode: malformed sequence, buffer underflow")
-			end
-			local byte = buffer.readu8(b, readOffset)
-			local sevenBits = byte % 128
-			if shift == 49 and (sevenBits > 16 or result > 0) then
-				error("ULEB128Decode: integer exceeds 53-bit precision")
-			end
-			readOffset += 1
-			result += (sevenBits * (2 ^ shift))
-			if byte < 128 then
-				break
-			end
-			shift += 7
-			if shift > 49 then
-				error("ULEB128Decode: integer exceeds 53-bit precision or is malformed")
-			end
+	read = function(b: buffer, offset: number): (number, number)
+		local b0 = buffer.readu8(b, offset)
+		if b0 < 128 then
+			return b0, offset + 1
 		end
-		return result, readOffset
+
+		local b1 = buffer.readu8(b, offset + 1)
+		if b1 < 128 then
+			return (b0 - 128) + (b1 * 128), offset + 2
+		end
+
+		local b2 = buffer.readu8(b, offset + 2)
+		if b2 < 128 then
+			return (b0 - 128) + (b1 - 128) * 128 + (b2 * 16384), offset + 3
+		end
+
+		local b3 = buffer.readu8(b, offset + 3)
+		if b3 < 128 then
+			return (b0 - 128) + (b1 - 128) * 128 + (b2 - 128) * 16384 + (b3 * 2097152), offset + 4
+		end
+
+		local b4 = buffer.readu8(b, offset + 4)
+		if b4 < 128 then
+			return (b0 - 128) + (b1 - 128) * 128 + (b2 - 128) * 16384 + (b3 - 128) * 2097152 + (b4 * 268435456),
+				offset + 5
+		end
+
+		return readVarIntFallback(
+			b,
+			offset,
+			(b0 - 128) + (b1 - 128) * 128 + (b2 - 128) * 16384 + (b3 - 128) * 2097152 + (b4 - 128) * 268435456
+		)
 	end,
-	write = function(b: buffer, offset: number, value: number): number
-		value = math.min(math.floor(value), 2 ^ 53)
-		if value < 0 then
-			error(`ULEB128Encode: "value" must be non-negative, got {value}`)
-		end
-		if value == 0 then
-			buffer.writeu8(b, offset, 0)
-			return offset + 1
-		end
-		while value > 0 do
-			local byte = value % 128
-			value //= 128
-			if value > 0 then
-				byte += 128
-			end
-			buffer.writeu8(b, offset, byte)
-			offset += 1
-		end
-		return offset
-	end,
+	write = writeVarIntUnsigned,
 }
 
 Z.i8 = {
@@ -247,71 +319,68 @@ Z.i32 = {
 }
 
 Z.int = {
-	read = function(b: buffer, offset: number?): (number, number)
-		local buffLen = buffer.len(b)
-		local readOffset = offset or 0
-		if readOffset >= buffLen then
-			error("SLEB128Decode: malformed sequence, buffer underflow (reading first byte)")
+	read = function(b: buffer, offset: number): (number, number)
+		local b0 = buffer.readu8(b, offset)
+		local isNegative = (b0 % 2 == 1)
+
+		if b0 < 128 then
+			local v = b0
+			return (if isNegative then -(v + 1) / 2 else v / 2), offset + 1
 		end
-		local firstByte = buffer.readu8(b, readOffset)
-		readOffset += 1
-		local signBit = (firstByte % 128) // 64
-		local magnitude = firstByte % 64
-		if firstByte < 128 then
-			return (if signBit == 1 then -magnitude else magnitude), readOffset
+
+		local b1 = buffer.readu8(b, offset + 1)
+		if b1 < 128 then
+			local v = (b0 - 128) + (b1 * 128)
+			return (if isNegative then -(v + 1) / 2 else v / 2), offset + 2
 		end
-		local shift = 6
-		while true do
-			if readOffset >= buffLen then
-				error("SLEB128Decode: malformed sequence, buffer underflow (reading continuation byte)")
-			end
-			local byte = buffer.readu8(b, readOffset)
-			readOffset += 1
-			local sevenBits = byte % 128
-			magnitude += (sevenBits * (2 ^ shift))
-			if byte < 128 then
-				break
-			end
-			shift += 7
-			if shift > 48 then
-				error("SLEB128Decode: integer exceeds 53-bit precision or is malformed")
-			end
+
+		local b2 = buffer.readu8(b, offset + 2)
+		if b2 < 128 then
+			local v = (b0 - 128) + (b1 - 128) * 128 + (b2 * 16384)
+			return (if isNegative then -(v + 1) / 2 else v / 2), offset + 3
 		end
-		return (if signBit == 1 then -magnitude else magnitude), readOffset
+
+		local b3 = buffer.readu8(b, offset + 3)
+		if b3 < 128 then
+			local v = (b0 - 128) + (b1 - 128) * 128 + (b2 - 128) * 16384 + (b3 * 2097152)
+			return (if isNegative then -(v + 1) / 2 else v / 2), offset + 4
+		end
+
+		local b4 = buffer.readu8(b, offset + 4)
+		if b4 < 128 then
+			local v = (b0 - 128) + (b1 - 128) * 128 + (b2 - 128) * 16384 + (b3 - 128) * 2097152 + (b4 * 268435456)
+			return (if isNegative then -(v + 1) / 2 else v / 2), offset + 5
+		end
+
+		local v, newOffset = readVarIntFallback(
+			b,
+			offset,
+			(b0 - 128) + (b1 - 128) * 128 + (b2 - 128) * 16384 + (b3 - 128) * 2097152 + (b4 - 128) * 268435456
+		)
+
+		return (if isNegative then -(v + 1) / 2 else v / 2), newOffset
 	end,
+
 	write = function(b: buffer, offset: number, value: number): number
-		value = math.clamp(math.round(value), -2 ^ 53, 2 ^ 53)
-		local signBit: number
-		local magnitude: number
-		if value < 0 then
-			signBit = 1
-			magnitude = -value
+		local head: number
+		local tail: number
+
+		if value >= 0 then
+			head = (value % 64) * 2
+			tail = value // 64
 		else
-			signBit = 0
-			magnitude = value
+			local absValue = -value
+			head = ((absValue % 64) * 2 - 1) % 128
+			tail = (absValue - 1) // 64
 		end
-		if magnitude == 0 then
-			buffer.writeu8(b, offset, 0)
+
+		if tail == 0 then
+			buffer.writeu8(b, offset, head)
 			return offset + 1
+		else
+			buffer.writeu8(b, offset, head + 128)
+			return writeVarIntUnsigned(b, offset + 1, tail)
 		end
-		local firstSixBits = magnitude % 64
-		magnitude //= 64
-		local byte = firstSixBits + (signBit * 64)
-		if magnitude > 0 then
-			byte += 128
-		end
-		buffer.writeu8(b, offset, byte)
-		offset += 1
-		while magnitude > 0 do
-			byte = magnitude % 128
-			magnitude //= 128
-			if magnitude > 0 then
-				byte += 128
-			end
-			buffer.writeu8(b, offset, byte)
-			offset += 1
-		end
-		return offset
 	end,
 }
 
@@ -1142,8 +1211,11 @@ for i, v in idToZType do
 end
 
 local function serializeUnsafe(schema: Schema, obj: Data, b: buffer, offset: number): number
-	for _, field in schema.fields do
-		offset = field.write(b, offset, obj[field.key])
+	local keys = schema.keys
+	local writes = schema.writes
+
+	for i = 1, schema.count do
+		offset = writes[i](b, offset, obj[keys[i]])
 	end
 
 	return offset
@@ -1157,7 +1229,7 @@ local function serializeListUnsafe(schema: Schema, list: { any }, b: buffer, off
 	schema.writeLen(b, offset, #list)
 	offset += schema.sizeLen
 
-	local write = schema.fields[1].write
+	local write = schema.writes[1]
 
 	for _, obj in list do
 		offset = write(b, offset, obj)
@@ -1169,7 +1241,7 @@ end
 local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer, offset: number): number
 	local start = offset
 	local writeK = (schema.fields[1].key :: ZType).write
-	local writeV = schema.fields[1].write
+	local writeV = schema.writes[1]
 
 	offset += schema.sizeLen
 
@@ -1191,17 +1263,20 @@ end
 
 local function deserialize(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
 	local result: Data = {}
+	local keys = schema.keys
+	local reads = schema.reads
+	local count = schema.count
 
 	if safe then
-		for _, field in schema.fields do
-			local ok, value, pos = pcall(field.read :: any, b, offset, safe)
+		for i = 1, count do
+			local ok, value, pos = pcall(reads[i] :: any, b, offset, safe)
 			if ok then
-				result[field.key], offset = value, pos
+				result[keys[i]], offset = value, pos
 			end
 		end
 	else
-		for _, field in schema.fields do
-			result[field.key], offset = field.read(b, offset)
+		for i = 1, count do
+			result[keys[i]], offset = reads[i](b, offset)
 		end
 	end
 
@@ -1246,7 +1321,7 @@ end
 
 local function deserializeMap(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
 	local readK = (schema.fields[1].key :: ZType).read
-	local readV = schema.fields[1].read
+	local readV = schema.reads[1]
 	local result: Data
 
 	if safe then
@@ -1416,18 +1491,29 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 
 	table.sort(fields, sortByKey)
 
+	local keys = table.create(#fields)
+	local reads = table.create(#fields)
+	local writes = table.create(#fields)
+
+	for i, field in fields do
+		keys[i] = field.key
+		reads[i] = field.read
+		writes[i] = field.write
+	end
+
 	local deserialize: any = if isList then deserializeList elseif isMap then deserializeMap else deserialize
 	local serialize: any = if isList then serializeListUnsafe elseif isMap then serializeMapUnsafe else serializeUnsafe
 
 	local schema
 	schema = table.freeze({
+		count = #fields,
 		fields = fields,
+		keys = keys,
+		reads = reads,
+		writes = writes,
 		isList = isList,
 		isMap = isMap,
 		name = "Schema",
-		readLen = readLen,
-		writeLen = writeLen,
-		sizeLen = math.ceil((bits or 32) / 8),
 		read = function(b: buffer, offset: number, safe: boolean?): (Data, number)
 			return deserialize(schema, b, offset, safe)
 		end,
@@ -1439,6 +1525,10 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 
 			return serialize(schema, value, b, offset)
 		end,
+
+		readLen = readLen,
+		writeLen = writeLen,
+		sizeLen = math.ceil((bits or 32) / 8),
 	})
 
 	return schema :: Schema
