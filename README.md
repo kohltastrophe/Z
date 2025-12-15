@@ -99,7 +99,7 @@ Z.migrate(old: Schema, new: Schema, b: buffer, change: ((Data) -> Data)?)
 Migrates binary data from a `buffer` to `newSchema`, if it matches `oldSchema`.
 
 - `change` is an optional function that can modify the data before serializing to the new schema.
-- **Returns:** `(buffer | number, nil)` on success, or `(nil, string)` on error.
+- **Returns:** `(number, nil)` on success, or `(nil, string)` on error.
 
 ```luau
 Z.some(t: ZType)
