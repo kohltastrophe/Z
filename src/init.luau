@@ -423,12 +423,13 @@ local function createStringType(
 			return buffer.readstring(b, offset + lenBytes, length), offset + lenBytes + length
 		end,
 		write = function(b: buffer, offset: number, value: string): number
-			local length = string.len(value)
-			if length > size and not Z.TRIM_STRINGS then
+			local rawLength = string.len(value)
+			if rawLength > size and not Z.TRIM_STRINGS then
 				error(`string exceeds bounds`)
 			end
-			writeLen(b, offset, math.min(length, size))
-			buffer.writestring(b, offset + lenBytes, value, math.min(length, size))
+			local length = math.min(rawLength, size)
+			writeLen(b, offset, length)
+			buffer.writestring(b, offset + lenBytes, value, length)
 			return offset + lenBytes + length
 		end,
 	}
