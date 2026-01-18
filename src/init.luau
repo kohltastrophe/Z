@@ -984,7 +984,7 @@ if Vector3int16 then
 end
 
 if Path2DControlPoint then
-	local ZERO = UDim2.new()
+	local ZERO = UDim2.new(0, 0, 0, 0)
 
 	Z.Path2DControlPoint = {
 		read = function(b: buffer, offset: number): (Path2DControlPoint, number)
@@ -1438,7 +1438,7 @@ function Z.migrate(old: Schema, new: Schema, b: buffer, change: ((Data) -> Data)
 		return nil, `Incomplete data: {offset} bytes read, {buffer.len(b)} bytes expected`
 	end
 
-	return Z.ser(new, if change then change(data) else data)
+	return Z.ser(new, if change then change(data) else data) :: any
 end
 
 local function sortByKey(a: Field, b: Field): boolean
