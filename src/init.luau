@@ -210,7 +210,9 @@ local function writeVarIntFallback(b: buffer, offset: number, value: number): nu
 end
 
 local function writeVarIntUnsigned(b: buffer, offset: number, value: number): number
-	if value < 128 then
+	if value < 0 then
+		error(`unsigned integer expected, got negative number: {value}`)
+	elseif value < 128 then
 		buffer.writeu8(b, offset, value)
 		return offset + 1
 	elseif value < 16384 then
