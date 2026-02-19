@@ -1434,7 +1434,7 @@ function Z.des(schema: Schema | ZType, b: buffer, offset: number?, safe: boolean
 end
 
 --- Migrates a buffer to a new schema. When provided, the change function's result will be serialized with the new schema.
-function Z.migrate(old: Schema, new: Schema, b: buffer, change: ((Data) -> Data)?): (number?, string?)
+function Z.migrate(old: Schema, new: Schema, b: buffer, change: ((Data) -> Data)?): ((buffer | number)?, string?)
 	local data, offset = Z.des(old, b, 0, true)
 	if offset ~= buffer.len(b) then
 		return nil, `Incomplete data: {offset} bytes read, {buffer.len(b)} bytes expected`
