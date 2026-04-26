@@ -28,9 +28,10 @@ export type Schema = {
 	name: string,
 	read: Read,
 	write: Write,
-	readLen: (b: buffer, offset: number) -> any,
-	writeLen: (b: buffer, offset: number, value: number) -> (),
-	sizeLen: number,
+	maxItems: number?,
+	readLen: typeof(buffer.readu8)?,
+	writeLen: typeof(buffer.writeu8)?,
+	sizeLen: number?,
 }
 
 local function isZType(value: any?): boolean
@@ -1228,12 +1229,14 @@ local function serializeUnsafe(schema: Schema, obj: Data, b: buffer, offset: num
 end
 
 local function serializeListUnsafe(schema: Schema, list: { any }, b: buffer, offset: number): number
-	if #list > 2 ^ (schema.sizeLen * 8) - 1 then
-		error(`List length exceeds bounds of {2 ^ (schema.sizeLen * 8) - 1}, got {#list}`)
+	if #list > schema.maxItems :: number then
+		error(`List length exceeds bounds of {schema.maxItems}, got {#list}`)
 	end
 
-	schema.writeLen(b, offset, #list)
-	offset += schema.sizeLen
+	local writeLen = schema.writeLen :: typeof(buffer.writeu8)
+
+	writeLen(b, offset, #list)
+	offset += schema.sizeLen :: number
 
 	local write = schema.writes[1]
 
@@ -1248,8 +1251,9 @@ local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer
 	local start = offset
 	local writeK = (schema.fields[1].key :: ZType).write
 	local writeV = schema.writes[1]
+	local writeLen = schema.writeLen :: typeof(buffer.writeu8)
 
-	offset += schema.sizeLen
+	offset += schema.sizeLen :: number
 
 	local n = 0
 	for k, v in map do
@@ -1258,11 +1262,11 @@ local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer
 		n += 1
 	end
 
-	if n > 2 ^ (schema.sizeLen * 8) - 1 then
-		error(`Map length exceeds bounds of {2 ^ (schema.sizeLen * 8) - 1}, got {n}`)
+	if n > schema.maxItems :: number then
+		error(`Map length exceeds bounds of {schema.maxItems}, got {n}`)
 	end
 
-	schema.writeLen(b, start, n)
+	writeLen(b, start, n)
 
 	return offset
 end
@@ -1290,21 +1294,22 @@ local function deserialize(schema: Schema, b: buffer, offset: number, safe: bool
 end
 
 local function deserializeList(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
-	local read = schema.fields[1].read
+	local readLen = schema.readLen :: typeof(buffer.readu8)
+	local read = schema.fields[1].read :: any
 	local result: Data
 
 	if safe then
-		local ok, length = pcall(schema.readLen :: any, b, offset)
+		local ok, length = pcall(readLen, b, offset)
 
 		if not ok then
 			return result, offset
 		end
 
 		result = table.create(length) :: Data
-		offset += schema.sizeLen
+		offset += schema.sizeLen :: number
 
 		for i = 1, length do
-			local success, value, pos = pcall(read :: any, b, offset, safe)
+			local success, value, pos = pcall(read, b, offset, safe)
 
 			if not success then
 				break
@@ -1313,8 +1318,8 @@ local function deserializeList(schema: Schema, b: buffer, offset: number, safe: 
 			result[i], offset = value, pos
 		end
 	else
-		local length = schema.readLen(b, offset)
-		offset += schema.sizeLen
+		local length = readLen(b, offset)
+		offset += schema.sizeLen :: number
 		result = table.create(length) :: Data
 
 		for i = 1, length do
@@ -1326,29 +1331,30 @@ local function deserializeList(schema: Schema, b: buffer, offset: number, safe: 
 end
 
 local function deserializeMap(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
-	local readK = (schema.fields[1].key :: ZType).read
-	local readV = schema.reads[1]
+	local readLen = schema.readLen :: typeof(buffer.readu8)
+	local readK = (schema.fields[1].key :: ZType).read :: any
+	local readV = schema.reads[1] :: any
 	local result: Data
 
 	if safe then
-		local ok, length = pcall(schema.readLen :: any, b, offset)
+		local ok, length = pcall(readLen, b, offset)
 
 		if not ok then
 			return result, offset
 		end
 
 		result = table.create(length) :: Data
-		offset += schema.sizeLen
+		offset += schema.sizeLen :: number
 
 		for i = 1, length do
-			local success, key, pos = pcall(readK :: any, b, offset, safe)
+			local success, key, pos = pcall(readK, b, offset, safe)
 
 			if not success then
 				break
 			end
 
 			local value
-			success, value, pos = pcall(readV :: any, b, pos, safe)
+			success, value, pos = pcall(readV, b, pos, safe)
 
 			if not success then
 				break
@@ -1357,8 +1363,8 @@ local function deserializeMap(schema: Schema, b: buffer, offset: number, safe: b
 			result[key], offset = value, pos
 		end
 	else
-		local length = schema.readLen(b, offset)
-		offset += schema.sizeLen
+		local length = readLen(b, offset)
+		offset += schema.sizeLen :: number
 		result = table.create(length) :: Data
 
 		for i = 1, length do
@@ -1454,13 +1460,16 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 	local firstKey = next(definition)
 	local isMap = isZType(firstKey)
 
-	local readLen, writeLen = buffer.readu32, buffer.writeu32
+	local maxItems, readLen, writeLen
 	if isList or isMap then
+		maxItems = 2 ^ (bits or 32) - 1
 		if bits == 8 then
 			readLen, writeLen = buffer.readu8, buffer.writeu8
 		elseif bits == 16 then
 			readLen, writeLen = buffer.readu16, buffer.writeu16
-		elseif bits ~= 32 and bits ~= nil then
+		elseif bits == 32 or bits == nil then
+			readLen, writeLen = buffer.readu32, buffer.writeu32
+		else
 			error(`Expected 8, 16, or 32 for parameter "bits", got {bits}`)
 		end
 	end
@@ -1516,8 +1525,6 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 		keys = keys,
 		reads = reads,
 		writes = writes,
-		isList = isList,
-		isMap = isMap,
 		name = "Schema",
 		read = function(b: buffer, offset: number, safe: boolean?): (Data, number)
 			return deserialize(schema, b, offset, safe)
@@ -1531,6 +1538,9 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 			return serialize(schema, value, b, offset)
 		end,
 
+		isList = isList,
+		isMap = isMap,
+		maxItems = maxItems,
 		readLen = readLen,
 		writeLen = writeLen,
 		sizeLen = math.ceil((bits or 32) / 8),
