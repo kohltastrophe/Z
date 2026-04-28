@@ -1185,7 +1185,7 @@ Z.table = {
 			if not zTypeV then
 				error(`unsupported type "{typeV}" for value "{tostring(v)}" of key "{k}"`)
 			end
-			buffer.writeu16(b, offset, ZTypeToId[zTypeK] + ZTypeToId[zTypeV] * 2 ^ 8)
+			buffer.writeu16(b, offset, ZTypeToId[zTypeK] + ZTypeToId[zTypeV] * 256)
 			offset = zTypeK.write(b, offset + 2, k)
 			offset = zTypeV.write(b, offset, v)
 			length += 1
