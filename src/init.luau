@@ -10,6 +10,7 @@ local SIZE_16 = 2 ^ 16 - 1
 local SIZE_32 = 2 ^ 32 - 1
 
 export type Read = (b: buffer, offset: number) -> (any, number)
+export type ReadSafe = (b: buffer, offset: number, safe: boolean?) -> (any, number)
 export type Write = (b: buffer, offset: number, value: any) -> number
 export type ZType = { read: Read, write: Write }
 
@@ -45,10 +46,14 @@ local Z = {
 	TRIM_STRINGS = false,
 }
 
-local someCache = {}
+local someCache: { [ZType]: ZType } = setmetatable({}, { __mode = "k" }) :: any
 
 --- Wraps a ZType to make it optional, adding 1 byte of overhead.
 function Z.some(t: ZType): ZType
+	if not isZType(t) then
+		error(`ZType expected, got {typeof(t)}`)
+	end
+
 	local result = someCache[t]
 
 	if not result then
@@ -122,10 +127,10 @@ local function writeBool(buf: buffer, offset: number, a: B, b: B?, c: B?, d: B?,
 end
 
 Z.bool = {
-	read = function(b: buffer, offset: number): (boolean, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readu8(b, offset) == 1, offset + 1
 	end,
-	write = function(b: buffer, offset: number, value: boolean): number
+	write = function(b: buffer, offset: number, value: boolean)
 		if type(value) ~= "boolean" then
 			error(`boolean expected, got {typeof(value)}`)
 		end
@@ -135,10 +140,10 @@ Z.bool = {
 }
 
 Z.bools = {
-	read = function(b: buffer, offset: number): ({ boolean }, number)
+	read = function(b: buffer, offset: number)
 		return { readBool(b, offset) }, offset + 1
 	end,
-	write = function(b: buffer, offset: number, value: { boolean }): number
+	write = function(b: buffer, offset: number, value: { boolean })
 		return writeBool(b, offset, value[1], value[2], value[3], value[4], value[5], value[6], value[7], value[8])
 	end,
 }
@@ -146,36 +151,36 @@ Z.bools = {
 Z.boolean = Z.bool
 
 Z.u8 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readu8(b, offset), offset + 1
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writeu8(b, offset, value)
 		return offset + 1
 	end,
 }
 
 Z.u16 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readu16(b, offset), offset + 2
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writeu16(b, offset, value)
 		return offset + 2
 	end,
 }
 
 Z.u32 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readu32(b, offset), offset + 4
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writeu32(b, offset, value)
 		return offset + 4
 	end,
 }
 
-local function readVarIntFallback(b: buffer, offset: number, result: number): (number, number)
+local function readVarIntFallback(b: buffer, offset: number, result: number)
 	local current = buffer.readu8(b, offset + 5)
 	result += (current % 128) * 34359738368
 	if current < 128 then
@@ -199,7 +204,7 @@ local function readVarIntFallback(b: buffer, offset: number, result: number): (n
 	return result, offset + 9
 end
 
-local function writeVarIntFallback(b: buffer, offset: number, value: number): number
+local function writeVarIntFallback(b: buffer, offset: number, value: number)
 	local temp = value
 	while temp >= 128 do
 		buffer.writeu8(b, offset, (temp % 128) + 128)
@@ -210,7 +215,7 @@ local function writeVarIntFallback(b: buffer, offset: number, value: number): nu
 	return offset + 1
 end
 
-local function writeVarIntUnsigned(b: buffer, offset: number, value: number): number
+local function writeVarIntUnsigned(b: buffer, offset: number, value: number)
 	if value < 0 then
 		error(`unsigned integer expected, got negative number: {value}`)
 	elseif value < 128 then
@@ -250,7 +255,7 @@ local function writeVarIntUnsigned(b: buffer, offset: number, value: number): nu
 end
 
 Z.uint = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		local b0 = buffer.readu8(b, offset)
 		if b0 < 128 then
 			return b0, offset + 1
@@ -287,37 +292,37 @@ Z.uint = {
 }
 
 Z.i8 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readi8(b, offset), offset + 1
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writei8(b, offset, value)
 		return offset + 1
 	end,
 }
 
 Z.i16 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readi16(b, offset), offset + 2
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writei16(b, offset, value)
 		return offset + 2
 	end,
 }
 
 Z.i32 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readi32(b, offset), offset + 4
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writei32(b, offset, value)
 		return offset + 4
 	end,
 }
 
 Z.int = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		local b0 = buffer.readu8(b, offset)
 		local isNegative = (b0 % 2 == 1)
 
@@ -359,7 +364,7 @@ Z.int = {
 		return (if isNegative then -(v + 1) / 2 else v / 2), newOffset
 	end,
 
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		local head: number
 		local tail: number
 
@@ -383,20 +388,20 @@ Z.int = {
 }
 
 Z.f32 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readf32(b, offset), offset + 4
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writef32(b, offset, value)
 		return offset + 4
 	end,
 }
 
 Z.f64 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readf64(b, offset), offset + 8
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writef64(b, offset, value)
 		return offset + 8
 	end,
@@ -405,10 +410,10 @@ Z.f64 = {
 Z.number = Z.f64
 
 Z.byte = {
-	read = function(b: buffer, offset: number): (string, number)
+	read = function(b: buffer, offset: number)
 		return buffer.readstring(b, offset, 1), offset + 1
 	end,
-	write = function(b: buffer, offset: number, value: string): number
+	write = function(b: buffer, offset: number, value: string)
 		buffer.writestring(b, offset, value, 1)
 		return offset + 1
 	end,
@@ -421,14 +426,14 @@ local function createStringType(
 	lenBytes: number
 )
 	return {
-		read = function(b: buffer, offset: number): (string, number)
+		read = function(b: buffer, offset: number)
 			local length = readLen(b, offset)
 			return buffer.readstring(b, offset + lenBytes, length), offset + lenBytes + length
 		end,
-		write = function(b: buffer, offset: number, value: string): number
+		write = function(b: buffer, offset: number, value: string)
 			local rawLength = string.len(value)
 			if rawLength > size and not Z.TRIM_STRINGS then
-				error(`string exceeds bounds`)
+				error(`string of length {rawLength} exceeds bounds of {size}`)
 			end
 			local length = math.min(rawLength, size)
 			writeLen(b, offset, length)
@@ -450,16 +455,19 @@ local function createBufferType(
 	lenBytes: number
 )
 	return {
-		read = function(b: buffer, offset: number): (buffer, number)
+		read = function(b: buffer, offset: number)
 			local length = readLen(b, offset)
+			if length > buffer.len(b) - offset - lenBytes then
+				error(`buffer length exceeds remaining data`)
+			end
 			local value = buffer.create(length)
 			buffer.copy(value, 0, b, offset + lenBytes, length)
 			return value, offset + lenBytes + length
 		end,
-		write = function(b: buffer, offset: number, value: buffer): number
+		write = function(b: buffer, offset: number, value: buffer)
 			local length = buffer.len(value)
 			if length > size then
-				error(`buffer exceeds bounds`)
+				error(`buffer of length {length} exceeds bounds of {size}`)
 			end
 			writeLen(b, offset, length)
 			buffer.copy(b, offset + lenBytes, value)
@@ -475,8 +483,8 @@ Z.buffer = Z.buffer32
 
 local range = math.rad(359)
 
-local function Angle8(angle: number): number
-	return math.floor((angle % (2 * math.pi)) * 255 / range + 0.5)
+local function Angle8(angle: number)
+	return math.floor((angle % (2 * math.pi)) * 255 / range + 0.5) % 256
 end
 
 local Angle8Map: { number } = {}
@@ -491,10 +499,10 @@ for degrees = 0, 315, 45 do
 end
 
 Z.Angle8 = {
-	read = function(b: buffer, offset: number): (number, number)
+	read = function(b: buffer, offset: number)
 		return Angle8Map[buffer.readu8(b, offset)], offset + 1
 	end,
-	write = function(b: buffer, offset: number, value: number): number
+	write = function(b: buffer, offset: number, value: number)
 		buffer.writeu8(b, offset, Angle8(value))
 		return offset + 1
 	end,
@@ -502,7 +510,7 @@ Z.Angle8 = {
 
 if Axes then
 	Z.Axes = {
-		read = function(b: buffer, offset: number): (Axes, number)
+		read = function(b: buffer, offset: number)
 			local x, y, z = readBool(b, offset)
 			local back, bottom, front, left, right, top = readBool(b, offset + 1)
 			return (Axes.new :: any)(
@@ -518,7 +526,7 @@ if Axes then
 			),
 				offset + 2
 		end,
-		write = function(b: buffer, offset: number, value: Axes): number
+		write = function(b: buffer, offset: number, value: Axes)
 			writeBool(b, offset, value.X, value.Y, value.Z)
 			writeBool(b, offset + 1, value.Back, value.Bottom, value.Front, value.Left, value.Right, value.Top)
 			return offset + 2
@@ -528,10 +536,10 @@ end
 
 if BrickColor then
 	Z.BrickColor = {
-		read = function(b: buffer, offset: number): (BrickColor, number)
+		read = function(b: buffer, offset: number)
 			return BrickColor.new(buffer.readu16(b, offset)), offset + 2
 		end,
-		write = function(b: buffer, offset: number, value: BrickColor): number
+		write = function(b: buffer, offset: number, value: BrickColor)
 			buffer.writeu16(b, offset, value.Number)
 			return offset + 2
 		end,
@@ -540,7 +548,7 @@ end
 
 if CFrame then
 	Z.CFrame = {
-		read = function(b: buffer, offset: number): (CFrame, number)
+		read = function(b: buffer, offset: number)
 			return CFrame.new(
 				buffer.readf32(b, offset),
 				buffer.readf32(b, offset + 4),
@@ -557,7 +565,7 @@ if CFrame then
 			),
 				offset + 48
 		end,
-		write = function(b: buffer, offset: number, value: CFrame): number
+		write = function(b: buffer, offset: number, value: CFrame)
 			local v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 = value:GetComponents()
 			buffer.writef32(b, offset, v0)
 			buffer.writef32(b, offset + 4, v1)
@@ -576,7 +584,7 @@ if CFrame then
 	}
 
 	Z.CFrame28 = {
-		read = function(b: buffer, offset: number): (CFrame, number)
+		read = function(b: buffer, offset: number)
 			return CFrame.fromAxisAngle(
 				Vector3.new(
 					buffer.readf32(b, offset + 12),
@@ -587,7 +595,7 @@ if CFrame then
 			) + Vector3.new(buffer.readf32(b, offset), buffer.readf32(b, offset + 4), buffer.readf32(b, offset + 8)),
 				offset + 28
 		end,
-		write = function(b: buffer, offset: number, value: CFrame): number
+		write = function(b: buffer, offset: number, value: CFrame)
 			local axis, angle = value:ToAxisAngle()
 			buffer.writef32(b, offset, value.X)
 			buffer.writef32(b, offset + 4, value.Y)
@@ -601,20 +609,21 @@ if CFrame then
 	}
 
 	Z.CFrame15 = {
-		read = function(b: buffer, offset: number): (CFrame, number)
-			return CFrame.Angles(
+		read = function(b: buffer, offset: number)
+			return CFrame.fromOrientation(
 				Angle8Map[buffer.readu8(b, offset + 12)],
 				Angle8Map[buffer.readu8(b, offset + 13)],
 				Angle8Map[buffer.readu8(b, offset + 14)]
 			) + Vector3.new(buffer.readf32(b, offset), buffer.readf32(b, offset + 4), buffer.readf32(b, offset + 8)),
 				offset + 15
 		end,
-		write = function(b: buffer, offset: number, value: CFrame): number
+		write = function(b: buffer, offset: number, value: CFrame)
 			local rx, ry, rz = value:ToOrientation()
 			buffer.writef32(b, offset, value.X)
 			buffer.writef32(b, offset + 4, value.Y)
 			buffer.writef32(b, offset + 8, value.Z)
-			buffer.writeu32(b, offset + 12, Angle8(rx) + Angle8(ry) * 256 + Angle8(rz) * 65536)
+			buffer.writeu16(b, offset + 12, Angle8(rx) + Angle8(ry) * 256)
+			buffer.writeu8(b, offset + 14, Angle8(rz))
 			return offset + 15
 		end,
 	}
@@ -622,15 +631,16 @@ end
 
 if Color3 then
 	Z.Color3 = {
-		read = function(b: buffer, offset: number): (Color3, number)
+		read = function(b: buffer, offset: number)
 			return Color3.fromRGB(buffer.readu8(b, offset), buffer.readu8(b, offset + 1), buffer.readu8(b, offset + 2)),
 				offset + 3
 		end,
-		write = function(b: buffer, offset: number, value: Color3): number
+		write = function(b: buffer, offset: number, value: Color3)
 			local R = math.floor(value.R * 255 + 0.5)
 			local G = math.floor(value.G * 255 + 0.5)
 			local B = math.floor(value.B * 255 + 0.5)
-			buffer.writeu32(b, offset, R + G * 256 + B * 65536)
+			buffer.writeu16(b, offset, R + G * 256)
+			buffer.writeu8(b, offset + 2, B)
 			return offset + 3
 		end,
 	}
@@ -638,14 +648,14 @@ end
 
 if ColorSequenceKeypoint then
 	Z.ColorSequenceKeypoint = {
-		read = function(b: buffer, offset: number): (ColorSequenceKeypoint, number)
+		read = function(b: buffer, offset: number)
 			return ColorSequenceKeypoint.new(
 				buffer.readu8(b, offset) / 255,
 				Color3.fromRGB(buffer.readu8(b, offset + 1), buffer.readu8(b, offset + 2), buffer.readu8(b, offset + 3))
 			),
 				offset + 4
 		end,
-		write = function(b: buffer, offset: number, value: ColorSequenceKeypoint): number
+		write = function(b: buffer, offset: number, value: ColorSequenceKeypoint)
 			local color = value.Value
 			local T = math.floor(value.Time * 255 + 0.5)
 			local R = math.floor(color.R * 255 + 0.5)
@@ -659,7 +669,7 @@ end
 
 if ColorSequence then
 	Z.ColorSequence = {
-		read = function(b: buffer, offset: number): (ColorSequence, number)
+		read = function(b: buffer, offset: number)
 			local count = buffer.readu8(b, offset)
 			local points: { ColorSequenceKeypoint } = {}
 			for i = 1, count do
@@ -668,7 +678,7 @@ if ColorSequence then
 			end
 			return ColorSequence.new(points), offset + 1 + count * 4
 		end,
-		write = function(b: buffer, offset: number, value: ColorSequence): number
+		write = function(b: buffer, offset: number, value: ColorSequence)
 			local count = #value.Keypoints
 			buffer.writeu8(b, offset, count)
 			for i, point in value.Keypoints do
@@ -681,10 +691,10 @@ end
 
 if DateTime then
 	Z.DateTime = {
-		read = function(b: buffer, offset: number): (DateTime, number)
+		read = function(b: buffer, offset: number)
 			return DateTime.fromUnixTimestampMillis(buffer.readf64(b, offset)), offset + 8
 		end,
-		write = function(b: buffer, offset: number, value: DateTime): number
+		write = function(b: buffer, offset: number, value: DateTime)
 			buffer.writef64(b, offset, value.UnixTimestampMillis)
 			return offset + 8
 		end,
@@ -695,11 +705,11 @@ if Enum then
 	local enumCache = {}
 
 	Z.EnumItem = setmetatable({
-		read = function(b: buffer, offset: number): (EnumItem, number)
+		read = function(b: buffer, offset: number)
 			local enumType, nextOffset = Z.str8.read(b, offset)
 			return (Z.EnumItem :: any)(Enum[enumType]).read(b, nextOffset)
 		end,
-		write = function(b: buffer, offset: number, value: EnumItem): number
+		write = function(b: buffer, offset: number, value: EnumItem)
 			offset = Z.str8.write(b, offset, tostring(value.EnumType))
 			return (Z.EnumItem :: any)(value.EnumType).write(b, offset, value)
 		end,
@@ -730,10 +740,10 @@ if Enum then
 
 				enumCache[enum] = table.freeze({
 					name = tostring(enum),
-					read = function(b: buffer, offset: number): (EnumItem, number)
+					read = function(b: buffer, offset: number)
 						return idToItem[read(b, offset)], offset + size
 					end,
-					write = function(b: buffer, offset: number, value: EnumItem): number
+					write = function(b: buffer, offset: number, value: EnumItem)
 						write(b, offset, itemToId[value])
 						return offset + size
 					end,
@@ -747,7 +757,7 @@ end
 
 if Faces then
 	Z.Faces = {
-		read = function(b: buffer, offset: number): (Faces, number)
+		read = function(b: buffer, offset: number)
 			local back, bottom, front, left, right, top = readBool(b, offset)
 			return Faces.new(
 				back and Enum.NormalId.Back :: any,
@@ -759,7 +769,7 @@ if Faces then
 			),
 				offset + 1
 		end,
-		write = function(b: buffer, offset: number, value: Faces): number
+		write = function(b: buffer, offset: number, value: Faces)
 			writeBool(b, offset, value.Back, value.Bottom, value.Front, value.Left, value.Right, value.Top)
 			return offset + 1
 		end,
@@ -767,27 +777,30 @@ if Faces then
 end
 
 if FloatCurveKey then
+	local interpolationMode = Z.EnumItem(Enum.KeyInterpolationMode)
+	local optionalF32 = Z.some(Z.f32)
+
 	Z.FloatCurveKey = {
-		read = function(b: buffer, offset: number): (FloatCurveKey, number)
-			local interpolation = Z.EnumItem(Enum.KeyInterpolationMode).read(b, offset)
+		read = function(b: buffer, offset: number)
+			local interpolation = interpolationMode.read(b, offset)
 			local time = buffer.readf32(b, offset + 1)
 			local value = buffer.readf32(b, offset + 5)
 			local result = FloatCurveKey.new(time, value, interpolation)
 			offset += 9
 			if interpolation == Enum.KeyInterpolationMode.Cubic then
-				result.LeftTangent, offset = Z.some(Z.f32).read(b, offset)
-				result.RightTangent, offset = Z.some(Z.f32).read(b, offset)
+				result.LeftTangent, offset = optionalF32.read(b, offset)
+				result.RightTangent, offset = optionalF32.read(b, offset)
 			end
 			return result, offset
 		end,
-		write = function(b: buffer, offset: number, value: FloatCurveKey): number
-			Z.EnumItem(Enum.KeyInterpolationMode).write(b, offset, value.Interpolation)
+		write = function(b: buffer, offset: number, value: FloatCurveKey)
+			interpolationMode.write(b, offset, value.Interpolation)
 			buffer.writef32(b, offset + 1, value.Time)
 			buffer.writef32(b, offset + 5, value.Value)
 			offset += 9
 			if value.Interpolation == Enum.KeyInterpolationMode.Cubic then
-				offset = Z.some(Z.f32).write(b, offset, value.LeftTangent)
-				offset = Z.some(Z.f32).write(b, offset, value.RightTangent)
+				offset = optionalF32.write(b, offset, value.LeftTangent)
+				offset = optionalF32.write(b, offset, value.RightTangent)
 			end
 			return offset
 		end,
@@ -810,20 +823,17 @@ if Font then
 	end
 
 	Z.Font = {
-		read = function(b: buffer, offset: number): (Font, number)
+		read = function(b: buffer, offset: number)
 			local byte = buffer.readu8(b, offset)
 			local family, newOffset = Z.str8.read(b, offset + 1)
-			local font = Font.new(
+			return Font.new(
 				family,
 				idToWeight[byte // 4],
 				if byte % 4 >= 2 then Enum.FontStyle.Italic else Enum.FontStyle.Normal
-			)
-			if byte % 2 == 1 then
-				font.Bold = true
-			end
-			return font, newOffset
+			),
+				newOffset
 		end,
-		write = function(b: buffer, offset: number, value: Font): number
+		write = function(b: buffer, offset: number, value: Font)
 			local byte = if value.Bold then 1 else 0
 			if value.Style == Enum.FontStyle.Italic then
 				byte += 2
@@ -837,12 +847,12 @@ end
 
 if NumberRange then
 	Z.NumberRange = {
-		read = function(b: buffer, offset: number): (NumberRange, number)
+		read = function(b: buffer, offset: number)
 			local min = buffer.readf64(b, offset)
 			local max = buffer.readf64(b, offset + 8)
 			return NumberRange.new(min, max), offset + 16
 		end,
-		write = function(b: buffer, offset: number, value: NumberRange): number
+		write = function(b: buffer, offset: number, value: NumberRange)
 			buffer.writef64(b, offset, value.Min)
 			buffer.writef64(b, offset + 8, value.Max)
 			return offset + 16
@@ -852,7 +862,7 @@ end
 
 if NumberSequenceKeypoint then
 	Z.NumberSequenceKeypoint = {
-		read = function(b: buffer, offset: number): (NumberSequenceKeypoint, number)
+		read = function(b: buffer, offset: number)
 			return NumberSequenceKeypoint.new(
 				buffer.readf32(b, offset),
 				buffer.readf32(b, offset + 4),
@@ -860,7 +870,7 @@ if NumberSequenceKeypoint then
 			),
 				offset + 12
 		end,
-		write = function(b: buffer, offset: number, value: NumberSequenceKeypoint): number
+		write = function(b: buffer, offset: number, value: NumberSequenceKeypoint)
 			buffer.writef32(b, offset, value.Time)
 			buffer.writef32(b, offset + 4, value.Value)
 			buffer.writef32(b, offset + 8, value.Envelope)
@@ -871,7 +881,7 @@ end
 
 if NumberSequence then
 	Z.NumberSequence = {
-		read = function(b: buffer, offset: number): (NumberSequence, number)
+		read = function(b: buffer, offset: number)
 			local count = buffer.readu8(b, offset)
 			local keypoints: { NumberSequenceKeypoint } = {}
 			for i = 1, count do
@@ -879,7 +889,7 @@ if NumberSequence then
 			end
 			return NumberSequence.new(keypoints), offset + 1 + count * 12
 		end,
-		write = function(b: buffer, offset: number, value: NumberSequence): number
+		write = function(b: buffer, offset: number, value: NumberSequence)
 			local count = #value.Keypoints
 			buffer.writeu8(b, offset, count)
 			for i, point in value.Keypoints do
@@ -892,10 +902,10 @@ end
 
 if UDim then
 	Z.UDim = {
-		read = function(b: buffer, offset: number): (UDim, number)
+		read = function(b: buffer, offset: number)
 			return UDim.new(buffer.readf32(b, offset), buffer.readf32(b, offset + 4)), offset + 8
 		end,
-		write = function(b: buffer, offset: number, value: UDim): number
+		write = function(b: buffer, offset: number, value: UDim)
 			buffer.writef32(b, offset, value.Scale)
 			buffer.writef32(b, offset + 4, value.Offset)
 			return offset + 8
@@ -905,7 +915,7 @@ end
 
 if UDim2 then
 	Z.UDim2 = {
-		read = function(b: buffer, offset: number): (UDim2, number)
+		read = function(b: buffer, offset: number)
 			return UDim2.new(
 				buffer.readf32(b, offset),
 				buffer.readf32(b, offset + 4),
@@ -914,7 +924,7 @@ if UDim2 then
 			),
 				offset + 16
 		end,
-		write = function(b: buffer, offset: number, value: UDim2): number
+		write = function(b: buffer, offset: number, value: UDim2)
 			buffer.writef32(b, offset, value.X.Scale)
 			buffer.writef32(b, offset + 4, value.X.Offset)
 			buffer.writef32(b, offset + 8, value.Y.Scale)
@@ -926,10 +936,10 @@ end
 
 if Vector2 then
 	Z.Vector2 = {
-		read = function(b: buffer, offset: number): (Vector2, number)
+		read = function(b: buffer, offset: number)
 			return Vector2.new(buffer.readf32(b, offset), buffer.readf32(b, offset + 4)), offset + 8
 		end,
-		write = function(b: buffer, offset: number, value: Vector2): number
+		write = function(b: buffer, offset: number, value: Vector2)
 			buffer.writef32(b, offset, value.X)
 			buffer.writef32(b, offset + 4, value.Y)
 			return offset + 8
@@ -939,10 +949,10 @@ end
 
 if Vector2int16 then
 	Z.Vector2i16 = {
-		read = function(b: buffer, offset: number): (Vector2int16, number)
+		read = function(b: buffer, offset: number)
 			return Vector2int16.new(buffer.readi16(b, offset), buffer.readi16(b, offset + 2)), offset + 4
 		end,
-		write = function(b: buffer, offset: number, value: Vector2int16): number
+		write = function(b: buffer, offset: number, value: Vector2int16)
 			buffer.writei16(b, offset, value.X)
 			buffer.writei16(b, offset + 2, value.Y)
 			return offset + 4
@@ -953,11 +963,11 @@ end
 
 if Vector3 then
 	Z.Vector3 = {
-		read = function(b: buffer, offset: number): (Vector3, number)
+		read = function(b: buffer, offset: number)
 			return Vector3.new(buffer.readf32(b, offset), buffer.readf32(b, offset + 4), buffer.readf32(b, offset + 8)),
 				offset + 12
 		end,
-		write = function(b: buffer, offset: number, value: Vector3): number
+		write = function(b: buffer, offset: number, value: Vector3)
 			buffer.writef32(b, offset, value.X)
 			buffer.writef32(b, offset + 4, value.Y)
 			buffer.writef32(b, offset + 8, value.Z)
@@ -968,7 +978,7 @@ end
 
 if Vector3int16 then
 	Z.Vector3i16 = {
-		read = function(b: buffer, offset: number): (Vector3int16, number)
+		read = function(b: buffer, offset: number)
 			return Vector3int16.new(
 				buffer.readi16(b, offset),
 				buffer.readi16(b, offset + 2),
@@ -976,7 +986,7 @@ if Vector3int16 then
 			),
 				offset + 6
 		end,
-		write = function(b: buffer, offset: number, value: Vector3int16): number
+		write = function(b: buffer, offset: number, value: Vector3int16)
 			buffer.writei16(b, offset, value.X)
 			buffer.writei16(b, offset + 2, value.Y)
 			buffer.writei16(b, offset + 4, value.Z)
@@ -988,25 +998,26 @@ end
 
 if Path2DControlPoint then
 	local ZERO = UDim2.new(0, 0, 0, 0)
+	local optionalUDim2 = Z.some(Z.UDim2)
 
 	Z.Path2DControlPoint = {
-		read = function(b: buffer, offset: number): (Path2DControlPoint, number)
-			local position, leftTangentOffset = Z.some(Z.UDim2).read(b, offset)
-			local leftTangent, rightTangentOffset = Z.some(Z.UDim2).read(b, leftTangentOffset)
-			local rightTangent, nextOffset = Z.some(Z.UDim2).read(b, rightTangentOffset)
+		read = function(b: buffer, offset: number)
+			local position, leftTangentOffset = optionalUDim2.read(b, offset)
+			local leftTangent, rightTangentOffset = optionalUDim2.read(b, leftTangentOffset)
+			local rightTangent, nextOffset = optionalUDim2.read(b, rightTangentOffset)
 			return Path2DControlPoint.new(position or ZERO, leftTangent or ZERO, rightTangent or ZERO), nextOffset
 		end,
-		write = function(b: buffer, offset: number, v: Path2DControlPoint): number
-			offset = Z.some(Z.UDim2).write(b, offset, if v.Position ~= ZERO then v.Position else nil)
-			offset = Z.some(Z.UDim2).write(b, offset, if v.LeftTangent ~= ZERO then v.LeftTangent else nil)
-			return Z.some(Z.UDim2).write(b, offset, if v.RightTangent ~= ZERO then v.RightTangent else nil)
+		write = function(b: buffer, offset: number, v: Path2DControlPoint)
+			offset = optionalUDim2.write(b, offset, if v.Position ~= ZERO then v.Position else nil)
+			offset = optionalUDim2.write(b, offset, if v.LeftTangent ~= ZERO then v.LeftTangent else nil)
+			return optionalUDim2.write(b, offset, if v.RightTangent ~= ZERO then v.RightTangent else nil)
 		end,
 	}
 end
 
 if PathWaypoint then
 	Z.PathWaypoint = {
-		read = function(b: buffer, offset: number): (PathWaypoint, number)
+		read = function(b: buffer, offset: number)
 			local label, newOffset = Z.str8.read(b, offset + 13)
 			return PathWaypoint.new(
 				Z.Vector3.read(b, offset + 1),
@@ -1015,7 +1026,7 @@ if PathWaypoint then
 			),
 				newOffset
 		end,
-		write = function(b: buffer, offset: number, value: PathWaypoint): number
+		write = function(b: buffer, offset: number, value: PathWaypoint)
 			buffer.writeu8(b, offset, value.Action.Value)
 			return Z.str8.write(b, Z.Vector3.write(b, offset + 1, value.Position), value.Label)
 		end,
@@ -1024,7 +1035,7 @@ end
 
 if PhysicalProperties then
 	Z.PhysicalProperties = {
-		read = function(b: buffer, offset: number): (PhysicalProperties, number)
+		read = function(b: buffer, offset: number)
 			return PhysicalProperties.new(
 				buffer.readf32(b, offset),
 				buffer.readf32(b, offset + 4),
@@ -1034,7 +1045,7 @@ if PhysicalProperties then
 			),
 				offset + 20
 		end,
-		write = function(b: buffer, offset: number, value: PhysicalProperties): number
+		write = function(b: buffer, offset: number, value: PhysicalProperties)
 			buffer.writef32(b, offset, value.Density)
 			buffer.writef32(b, offset + 4, value.Friction)
 			buffer.writef32(b, offset + 8, value.Elasticity)
@@ -1047,12 +1058,12 @@ end
 
 if Ray then
 	Z.Ray = {
-		read = function(b: buffer, offset: number): (Ray, number)
+		read = function(b: buffer, offset: number)
 			local origin = Z.Vector3.read(b, offset)
 			local direction = Z.Vector3.read(b, offset + 12)
 			return Ray.new(origin, direction), offset + 24
 		end,
-		write = function(b: buffer, offset: number, value: Ray): number
+		write = function(b: buffer, offset: number, value: Ray)
 			return Z.Vector3.write(b, Z.Vector3.write(b, offset, value.Origin), value.Direction)
 		end,
 	}
@@ -1060,12 +1071,12 @@ end
 
 if Rect then
 	Z.Rect = {
-		read = function(b: buffer, offset: number): (Rect, number)
+		read = function(b: buffer, offset: number)
 			local min = Z.Vector2.read(b, offset)
 			local max = Z.Vector2.read(b, offset + 8)
 			return Rect.new(min, max), offset + 16
 		end,
-		write = function(b: buffer, offset: number, value: Rect): number
+		write = function(b: buffer, offset: number, value: Rect)
 			return Z.Vector2.write(b, Z.Vector2.write(b, offset, value.Min), value.Max)
 		end,
 	}
@@ -1073,12 +1084,12 @@ end
 
 if Region3 then
 	Z.Region3 = {
-		read = function(b: buffer, offset: number): (Region3, number)
+		read = function(b: buffer, offset: number)
 			local min = Z.Vector3.read(b, offset)
 			local max = Z.Vector3.read(b, offset + 12)
 			return Region3.new(min, max), offset + 24
 		end,
-		write = function(b: buffer, offset: number, value: Region3): number
+		write = function(b: buffer, offset: number, value: Region3)
 			local halfSize = value.Size / 2
 			local pos = value.CFrame.Position
 			return Z.Vector3.write(b, Z.Vector3.write(b, offset, pos - halfSize), pos + halfSize)
@@ -1088,38 +1099,41 @@ end
 
 if Region3int16 then
 	Z.Region3int16 = {
-		read = function(b: buffer, offset: number): (Region3int16, number)
+		read = function(b: buffer, offset: number)
 			local min = Z.Vector3i16.read(b, offset)
 			local max = Z.Vector3i16.read(b, offset + 6)
 			return Region3int16.new(min, max), offset + 12
 		end,
-		write = function(b: buffer, offset: number, value: Region3int16): number
+		write = function(b: buffer, offset: number, value: Region3int16)
 			return Z.Vector3i16.write(b, Z.Vector3i16.write(b, offset, value.Min), value.Max)
 		end,
 	}
 end
 
 if RotationCurveKey then
+	local interpolationMode = Z.EnumItem(Enum.KeyInterpolationMode)
+	local optionalF32 = Z.some(Z.f32)
+
 	Z.RotationCurveKey = {
-		read = function(b: buffer, offset: number): (RotationCurveKey, number)
-			local interpolation = Z.EnumItem(Enum.KeyInterpolationMode).read(b, offset)
+		read = function(b: buffer, offset: number)
+			local interpolation = interpolationMode.read(b, offset)
 			local time = buffer.readf32(b, offset + 1)
 			local value = Z.CFrame.read(b, offset + 5)
 			local result = RotationCurveKey.new(time, value, interpolation)
 			offset += 53
 			if interpolation == Enum.KeyInterpolationMode.Cubic then
-				result.LeftTangent, offset = Z.some(Z.f32).read(b, offset)
-				result.RightTangent, offset = Z.some(Z.f32).read(b, offset)
+				result.LeftTangent, offset = optionalF32.read(b, offset)
+				result.RightTangent, offset = optionalF32.read(b, offset)
 			end
 			return result, offset
 		end,
-		write = function(b: buffer, offset: number, value: RotationCurveKey): number
-			Z.EnumItem(Enum.KeyInterpolationMode).write(b, offset, value.Interpolation)
+		write = function(b: buffer, offset: number, value: RotationCurveKey)
+			interpolationMode.write(b, offset, value.Interpolation)
 			buffer.writef32(b, offset + 1, value.Time)
 			offset = Z.CFrame.write(b, offset + 5, value.Value)
 			if value.Interpolation == Enum.KeyInterpolationMode.Cubic then
-				offset = Z.some(Z.f32).write(b, offset, value.LeftTangent)
-				return Z.some(Z.f32).write(b, offset, value.RightTangent)
+				offset = optionalF32.write(b, offset, value.LeftTangent)
+				return optionalF32.write(b, offset, value.RightTangent)
 			end
 			return offset
 		end,
@@ -1131,7 +1145,7 @@ if TweenInfo then
 	local style = Z.EnumItem(Enum.EasingStyle)
 
 	Z.TweenInfo = {
-		read = function(b: buffer, offset: number): (TweenInfo, number)
+		read = function(b: buffer, offset: number)
 			local result = TweenInfo.new(
 				buffer.readf32(b, offset),
 				style.read(b, offset + 11),
@@ -1142,7 +1156,7 @@ if TweenInfo then
 			)
 			return result, offset + 13
 		end,
-		write = function(b: buffer, offset: number, value: TweenInfo): number
+		write = function(b: buffer, offset: number, value: TweenInfo)
 			buffer.writef32(b, offset, value.Time)
 			buffer.writef32(b, offset + 4, value.DelayTime)
 			buffer.writei16(b, offset + 8, value.RepeatCount)
@@ -1152,14 +1166,49 @@ if TweenInfo then
 	}
 end
 
-local idToZType: { ZType } = { Z.EnumItem :: any }
+local idToZType: { ZType } = {}
 local ZTypeToId: { [ZType]: number } = {}
+
+local function writeTable(b: buffer, offset: number, value: { [any]: any }, seen: { [any]: boolean }?)
+	local path: { [any]: boolean } = seen or {}
+	if path[value] then
+		error(`cannot serialize cyclic table: "{tostring(value)}" contains a reference to itself`)
+	end
+	path[value] = true
+
+	local length = 0
+	local start = offset
+	offset += 4
+	for k, v in value do
+		local typeK = typeof(k)
+		local zTypeK: ZType = Z[typeK :: any]
+		if not zTypeK then
+			error(`unsupported type "{typeK}" for key "{k}"`)
+		end
+		local typeV = typeof(v)
+		local zTypeV: ZType = Z[typeV :: any]
+		if not zTypeV then
+			error(`unsupported type "{typeV}" for value "{tostring(v)}" of key "{k}"`)
+		end
+		buffer.writeu16(b, offset, ZTypeToId[zTypeK] + ZTypeToId[zTypeV] * 256)
+		offset = if typeK == "table" then writeTable(b, offset + 2, k, path) else zTypeK.write(b, offset + 2, k)
+		offset = if typeV == "table" then writeTable(b, offset, v, path) else zTypeV.write(b, offset, v)
+		length += 1
+	end
+	buffer.writeu32(b, start, length)
+
+	path[value] = nil
+	return offset
+end
 
 Z.table = {
 	read = function(b: buffer, offset: number): ({ [any]: any }, number)
 		local length = buffer.readu32(b, offset)
-		local value = table.create(length)
 		offset += 4
+		if length * 4 > buffer.len(b) - offset then
+			error(`table length exceeds remaining data`)
+		end
+		local value = table.create(length)
 		for _ = 1, length do
 			local zTypeK = idToZType[buffer.readu8(b, offset)]
 			local zTypeV = idToZType[buffer.readu8(b, offset + 1)]
@@ -1170,54 +1219,106 @@ Z.table = {
 		end
 		return value, offset
 	end,
-	write = function(b: buffer, offset: number, value: { [any]: any }): number
-		local length = 0
-		local start = offset
-		offset += 4
-		for k, v in value do
-			local typeK = typeof(k)
-			local zTypeK: ZType = Z[typeK :: any]
-			if not zTypeK then
-				error(`unsupported type "{typeK}" for key "{k}"`)
-			end
-			local typeV = typeof(v)
-			local zTypeV: ZType = Z[typeV :: any]
-			if not zTypeV then
-				error(`unsupported type "{typeV}" for value "{tostring(v)}" of key "{k}"`)
-			end
-			buffer.writeu16(b, offset, ZTypeToId[zTypeK] + ZTypeToId[zTypeV] * 256)
-			offset = zTypeK.write(b, offset + 2, k)
-			offset = zTypeV.write(b, offset, v)
-			length += 1
-		end
-		buffer.writeu32(b, start, length)
-		return offset
-	end,
+	write = writeTable,
 }
 
+-- Z.table's wire format embeds these ids, so they must not depend on table
+-- iteration order or name sorting. Append new types to the end; never insert,
+-- reorder, or remove entries, or previously serialized Z.table data will
+-- decode with the wrong types. Types missing in an environment (e.g. Roblox
+-- globals outside Roblox) leave a hole instead of shifting later ids.
+local ZTYPE_ORDER = {
+	"Angle8",
+	"Axes",
+	"BrickColor",
+	"CFrame",
+	"CFrame15",
+	"CFrame28",
+	"Color3",
+	"ColorSequence",
+	"ColorSequenceKeypoint",
+	"DateTime",
+	"EnumItem",
+	"Faces",
+	"FloatCurveKey",
+	"Font",
+	"NumberRange",
+	"NumberSequence",
+	"NumberSequenceKeypoint",
+	"Path2DControlPoint",
+	"PathWaypoint",
+	"PhysicalProperties",
+	"Ray",
+	"Rect",
+	"Region3",
+	"Region3int16",
+	"RotationCurveKey",
+	"TweenInfo",
+	"UDim",
+	"UDim2",
+	"Vector2",
+	"Vector2i16",
+	"Vector3",
+	"Vector3i16",
+	"bool",
+	"bools",
+	"buffer16",
+	"buffer32",
+	"buffer8",
+	"byte",
+	"f32",
+	"f64",
+	"i16",
+	"i32",
+	"i8",
+	"int",
+	"str16",
+	"str32",
+	"str8",
+	"table",
+	"u16",
+	"u32",
+	"u8",
+	"uint",
+}
+
+local zTypeKeys: { string } = {}
 for k, v in next, Z do
 	if isZType(v) then
-		if not (v :: any).name then
-			(v :: any).name = k
-		end
-		if not table.isfrozen(v :: any) then
-			table.freeze(v :: any)
-		end
-		if not table.find(idToZType, v :: ZType) then
-			table.insert(idToZType, v :: ZType)
-		end
+		table.insert(zTypeKeys, k :: string)
+	end
+end
+table.sort(zTypeKeys)
+
+for _, k in zTypeKeys do
+	local v = Z[k]
+	if not (v :: any).name then
+		(v :: any).name = k
+	end
+	if not table.isfrozen(v :: any) then
+		table.freeze(v :: any)
 	end
 end
 
-table.sort(idToZType, function(a: any, b: any)
-	return a.name < b.name
-end)
-
-for i, v in idToZType do
-	ZTypeToId[v] = i
+for id, name in ZTYPE_ORDER do
+	local v = (Z :: any)[name]
+	if v ~= nil then
+		idToZType[id] = v :: ZType
+		ZTypeToId[v :: ZType] = id
+	end
 end
 
-local function serializeUnsafe(schema: Schema, obj: Data, b: buffer, offset: number): number
+local nextId = #ZTYPE_ORDER
+for _, k in zTypeKeys do
+	local v = Z[k] :: ZType
+	if not ZTypeToId[v] then
+		nextId += 1
+		idToZType[nextId] = v
+		ZTypeToId[v] = nextId
+	end
+end
+
+local function serializeUnsafe(schema: Schema, obj: Data, b: buffer, offset: number)
 	local keys = schema.keys
 	local writes = schema.writes
 
@@ -1228,7 +1329,7 @@ local function serializeUnsafe(schema: Schema, obj: Data, b: buffer, offset: num
 	return offset
 end
 
-local function serializeListUnsafe(schema: Schema, list: { any }, b: buffer, offset: number): number
+local function serializeListUnsafe(schema: Schema, list: { any }, b: buffer, offset: number)
 	if #list > schema.maxItems :: number then
 		error(`List length exceeds bounds of {schema.maxItems}, got {#list}`)
 	end
@@ -1247,7 +1348,7 @@ local function serializeListUnsafe(schema: Schema, list: { any }, b: buffer, off
 	return offset
 end
 
-local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer, offset: number): number
+local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer, offset: number)
 	local start = offset
 	local writeK = (schema.fields[1].key :: ZType).write
 	local writeV = schema.writes[1]
@@ -1255,15 +1356,15 @@ local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer
 
 	offset += schema.sizeLen :: number
 
+	local maxItems = schema.maxItems :: number
 	local n = 0
 	for k, v in map do
+		n += 1
+		if n > maxItems then
+			error(`Map length exceeds bounds of {maxItems}`)
+		end
 		offset = writeK(b, offset, k)
 		offset = writeV(b, offset, v)
-		n += 1
-	end
-
-	if n > schema.maxItems :: number then
-		error(`Map length exceeds bounds of {schema.maxItems}, got {n}`)
 	end
 
 	writeLen(b, start, n)
@@ -1271,18 +1372,40 @@ local function serializeMapUnsafe(schema: Schema, map: { [any]: any }, b: buffer
 	return offset
 end
 
-local function deserialize(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
+local function readUnsafe(keys: any, reads: any, b: buffer, offset: number, safe: boolean, result: Data, n: number)
+	for i = 1, n do
+		result[keys[i]], offset = reads[i](b, offset, safe)
+	end
+	return offset
+end
+
+local function readListUnsafe(b: buffer, offset: number, safe: boolean?, read: ReadSafe, result: Data, n: number)
+	for i = 1, n do
+		result[i], offset = read(b, offset, safe)
+	end
+	return offset
+end
+
+local function readMapUnsafe(b: buffer, offset: number, safe: boolean?, readK: any, readV: any, result: Data, n: number)
+	for i = 1, n do
+		local key, pos = readK(b, offset)
+		result[key], offset = readV(b, pos)
+	end
+	return offset
+end
+
+local function deserialize(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data?, number)
 	local result: Data = {}
 	local keys = schema.keys
 	local reads = schema.reads
 	local count = schema.count
 
 	if safe then
-		for i = 1, count do
-			local ok, value, pos = pcall(reads[i] :: any, b, offset, safe)
-			if ok then
-				result[keys[i]], offset = value, pos
-			end
+		local success, newOffset = pcall(readUnsafe, keys, reads, b, offset, safe, result, count)
+		if success then
+			return result, newOffset
+		else
+			return nil, offset
 		end
 	else
 		for i = 1, count do
@@ -1293,33 +1416,36 @@ local function deserialize(schema: Schema, b: buffer, offset: number, safe: bool
 	return result, offset
 end
 
-local function deserializeList(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
+local function deserializeList(schema: Schema, b: buffer, offset: number, safe: boolean?)
 	local readLen = schema.readLen :: typeof(buffer.readu8)
 	local read = schema.fields[1].read :: any
-	local result: Data
+	local sizeLen = schema.sizeLen :: number
+	local result: Data?
 
 	if safe then
 		local ok, length = pcall(readLen, b, offset)
 
-		if not ok then
+		if not ok or length > buffer.len(b) - offset - sizeLen then
 			return result, offset
 		end
 
 		result = table.create(length) :: Data
-		offset += schema.sizeLen :: number
+		offset += sizeLen
 
-		for i = 1, length do
-			local success, value, pos = pcall(read, b, offset, safe)
-
-			if not success then
-				break
-			end
-
-			result[i], offset = value, pos
+		local success, newOffset = pcall(readListUnsafe, b, offset, safe, read, result, length)
+		if success then
+			return result, newOffset
+		else
+			return nil, offset
 		end
 	else
 		local length = readLen(b, offset)
-		offset += schema.sizeLen :: number
+		offset += sizeLen
+
+		if length > buffer.len(b) - offset then
+			error(`List length exceeds remaining data`)
+		end
+
 		result = table.create(length) :: Data
 
 		for i = 1, length do
@@ -1330,41 +1456,37 @@ local function deserializeList(schema: Schema, b: buffer, offset: number, safe: 
 	return result, offset
 end
 
-local function deserializeMap(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data, number)
+local function deserializeMap(schema: Schema, b: buffer, offset: number, safe: boolean?): (Data?, number)
 	local readLen = schema.readLen :: typeof(buffer.readu8)
 	local readK = (schema.fields[1].key :: ZType).read :: any
 	local readV = schema.reads[1] :: any
+	local sizeLen = schema.sizeLen :: number
 	local result: Data
 
 	if safe then
 		local ok, length = pcall(readLen, b, offset)
 
-		if not ok then
-			return result, offset
+		if not ok or length * 2 > buffer.len(b) - offset - sizeLen then
+			return nil, offset
 		end
 
 		result = table.create(length) :: Data
-		offset += schema.sizeLen :: number
+		offset += sizeLen
 
-		for i = 1, length do
-			local success, key, pos = pcall(readK, b, offset, safe)
-
-			if not success then
-				break
-			end
-
-			local value
-			success, value, pos = pcall(readV, b, pos, safe)
-
-			if not success then
-				break
-			end
-
-			result[key], offset = value, pos
+		local success, pos = pcall(readMapUnsafe, b, offset, safe, readK, readV, result, length)
+		if success then
+			return result, pos
+		else
+			return nil, offset
 		end
 	else
 		local length = readLen(b, offset)
-		offset += schema.sizeLen :: number
+		offset += sizeLen
+
+		if length * 2 > buffer.len(b) - offset then
+			error(`Map length exceeds remaining data`)
+		end
+
 		result = table.create(length) :: Data
 
 		for i = 1, length do
@@ -1392,11 +1514,6 @@ function Z.ser(schema: Schema, obj: any, b: buffer?, offset: number?, maxSize: n
 
 		for _, field in schema.fields do
 			local value = obj[field.key]
-
-			if value == nil then
-				return nil, `Missing field "{field.key}"`
-			end
-
 			local success, writeResult = pcall(field.write :: any, b, offset, value)
 
 			if success then
@@ -1404,6 +1521,11 @@ function Z.ser(schema: Schema, obj: any, b: buffer?, offset: number?, maxSize: n
 			else
 				local isZKey = isZType(field.key)
 				local name = if isZKey then (field.key :: any).name else field.key
+
+				-- TODO: ensure compatibility with Z.some fields so it won't error
+				if value == nil then
+					return nil, `Missing field "{tostring(name)}"`
+				end
 
 				if isZKey then
 					if name == "Schema" then
@@ -1420,12 +1542,8 @@ function Z.ser(schema: Schema, obj: any, b: buffer?, offset: number?, maxSize: n
 		return nil, result
 	elseif shouldReturnOffset then
 		return result, nil
-	elseif maxSize then
-		local length = math.min(result, maxSize)
-		local new = buffer.create(length)
-		buffer.copy(new, 0, Z.BUFFER, 0, length)
-
-		return new, nil
+	elseif maxSize and result > maxSize then
+		return nil, `Serialized size of {result} bytes exceeds maxSize of {maxSize}`
 	end
 
 	local new = buffer.create(result)
@@ -1435,22 +1553,35 @@ function Z.ser(schema: Schema, obj: any, b: buffer?, offset: number?, maxSize: n
 end
 
 --- Deserializes a buffer into a table. The `safe` flag suppresses errors from incomplete data.
-function Z.des(schema: Schema | ZType, b: buffer, offset: number?, safe: boolean?): (Data, number)
+function Z.des(schema: Schema | ZType, b: buffer, offset: number?, safe: boolean?): (Data?, number)
+	if safe then
+		local ok, value, pos = pcall(schema.read :: any, b, offset or 0, safe)
+		if ok then
+			return value, pos
+		end
+		return nil, offset or 0
+	end
 	return (schema.read :: any)(b, offset or 0, safe)
 end
 
 --- Migrates a buffer to a new schema. When provided, the change function's result will be serialized with the new schema.
 function Z.migrate(old: Schema, new: Schema, b: buffer, change: ((Data) -> Data)?): ((buffer | number)?, string?)
 	local data, offset = Z.des(old, b, 0, true)
-	if offset ~= buffer.len(b) then
-		return nil, `Incomplete data: {offset} bytes read, {buffer.len(b)} bytes expected`
+	if offset ~= buffer.len(b) or data == nil then
+		return nil, `Incomplete data: {offset} bytes read, {buffer.len(b)} bytes expected, got {data}`
 	end
 
-	return Z.ser(new, if change then change(data) else data) :: any
+	local result, err = Z.ser(new, if change then change(data) else data)
+	return result :: any, err
 end
 
 local function sortByKey(a: Field, b: Field): boolean
-	return (a.key :: string) < (b.key :: string)
+	local aKey, bKey = a.key, b.key
+	local aType, bType = type(aKey), type(bKey)
+	if aType ~= bType then
+		return aType < bType
+	end
+	return (aKey :: any) < (bKey :: any)
 end
 
 --- Creates a schema for serialization.
@@ -1476,19 +1607,19 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 
 	for key, value in next, definition do
 		if isList and key ~= 1 then
-			error(`Expected \{ Z.{definition[1]} } for list schema, got field "{key}"`)
+			error(`Expected \{ Z.{(definition[1] :: any).name} } for list schema, got field "{tostring(key)}"`)
 		elseif isMap then
 			if key ~= firstKey then
-				error(
-					`Expected \{ [Z.{(key :: any).name}] = Z.{(value :: any).name} } for map schema, got field "{key}"`
-				)
+				local keyName = (firstKey :: any).name
+				local valueName = (definition[firstKey :: any] :: any).name
+				error(`Expected \{ [Z.{keyName}] = Z.{valueName} } for map schema, got field "{tostring(key)}"`)
 			end
 		elseif type(key) ~= "string" and type(key) ~= "number" then
 			error(`Expected "string" or "number" for field "{tostring(key)}", got "{typeof(key)}"`)
 		end
 
 		if not isZType(value) then
-			error(`Expected "ZType" for field "{tostring(key)}", got incompatible "{typeof(key)}"`)
+			error(`Expected "ZType" for field "{tostring(key)}", got incompatible "{typeof(value)}"`)
 		end
 
 		table.insert(fields :: any, {
@@ -1515,8 +1646,8 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 		writes[i] = field.write
 	end
 
-	local deserialize: any = if isList then deserializeList elseif isMap then deserializeMap else deserialize
-	local serialize: any = if isList then serializeListUnsafe elseif isMap then serializeMapUnsafe else serializeUnsafe
+	local readImpl: any = if isList then deserializeList elseif isMap then deserializeMap else deserialize
+	local writeImpl: any = if isList then serializeListUnsafe elseif isMap then serializeMapUnsafe else serializeUnsafe
 
 	local schema
 	schema = table.freeze({
@@ -1527,7 +1658,7 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 		writes = writes,
 		name = "Schema",
 		read = function(b: buffer, offset: number, safe: boolean?): (Data, number)
-			return deserialize(schema, b, offset, safe)
+			return readImpl(schema, b, offset, safe)
 		end,
 		write = function(b: buffer, offset: number, value: any)
 			if type(value) == "buffer" then
@@ -1535,7 +1666,7 @@ function Z.schema(definition: SchemaDefinition, bits: number?): Schema
 				return offset + buffer.len(value)
 			end
 
-			return serialize(schema, value, b, offset)
+			return writeImpl(schema, value, b, offset)
 		end,
 
 		isList = isList,
