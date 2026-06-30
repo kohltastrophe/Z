@@ -33,7 +33,11 @@ jobs:
         run: rojo sourcemap --output sourcemap.json --include-non-scripts
 
       - name: Analyze
-        run: curl -sO https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.d.luau && luau-lsp analyze --defs=globalTypes.d.luau --sourcemap sourcemap.json src/ test/ && rm globalTypes.d.luau
+        run: |
+          echo '{"luau-lsp.fflags.enableNewSolver": true}' > .lsp-settings.json &&
+          curl -sO https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.d.luau &&
+          luau-lsp analyze --defs=globalTypes.d.luau --sourcemap sourcemap.json --settings=.lsp-settings.json src/ test/;
+          rm globalTypes.d.luau .lsp-settings.json
 
       - name: Format
         run: stylua --check src/ test/
